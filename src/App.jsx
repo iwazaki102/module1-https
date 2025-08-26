@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-// ===== Module 1 – Asset Registry & Hierarchy (Clean Build v7.9) =====
-// v7.9: Fix SyntaxError caused by duplicated addNode block & stray braces near end.
-//  - Removed accidental duplicate statements after addNode().
-//  - Verified all JSX/function closures are balanced.
-//  - Keep v7.8 behavior: parent auto-select for Subsystem L2+, clearer validation, export JSON flow.
+// ===== Module 1 – Asset Registry & Hierarchy (Clean Build v7.11.3) =====
+// v7.11.3: Remove Dev Tests & Edge Tests from public UI.
+// v7.11.2: Remove "Load Sample" button (to avoid accidental data additions). 
+// v7.11.1: Keep last selected Parent after Add (no auto-reset).
+// v7.11 (small update):
+//  - Removed buttons: Undo, Import from URL (per request).
+//  - Switched all UI labels/buttons to English.
+//  - No breaking logic changes; baseline v7.9 is still our rollback point.
 
 // Storage keys
 const LS_KEY = "module1_asset_nodes";
@@ -64,15 +67,15 @@ function getDescendantIds(id, list) { const out = [id]; list.filter((a) => a.par
 function checkParentRule(childType, lvl, parent) {
   if (childType === "System") return { ok: true };
   if (childType === "Subsystem") {
-    if (!parent) return { ok: false, err: "Subsystem wajib punya parent" };
-    if (lvl === 1) return parent.type === "System" ? { ok: true } : { ok: false, err: "Parent Subsystem L1 harus System" };
-    if (parent.type !== "Subsystem") return { ok: false, err: `Parent Subsystem L${lvl} harus Subsystem L${lvl - 1}` };
-    return Number(parent.level) === lvl - 1 ? { ok: true } : { ok: false, err: `Parent Subsystem L${lvl} harus Subsystem L${lvl - 1}` };
+    if (!parent) return { ok: false, err: "Subsystem requires a parent" };
+    if (lvl === 1) return parent.type === "System" ? { ok: true } : { ok: false, err: "Parent of Subsystem L1 must be a System" };
+    if (parent.type !== "Subsystem") return { ok: false, err: `Parent of Subsystem L${lvl} must be Subsystem L${lvl - 1}` };
+    return Number(parent.level) === lvl - 1 ? { ok: true } : { ok: false, err: `Parent of Subsystem L${lvl} must be Subsystem L${lvl - 1}` };
   }
   if (childType === "Component") {
-    return parent && parent.type === "Subsystem" ? { ok: true } : { ok: false, err: "Parent Component harus Subsystem" };
+    return parent && parent.type === "Subsystem" ? { ok: true } : { ok: false, err: "Parent of Component must be a Subsystem" };
   }
-  return { ok: false, err: "Tipe tidak dikenal" };
+  return { ok: false, err: "Unknown type" };
 }
 
 // ---- UI atoms ----
@@ -104,7 +107,7 @@ function Tree({ nodes }) {
 // ---- App ----
 export default function App() {
   const [nodes, setNodes] = useState([]);
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState([]); // kept internally (no Undo button shown)
   const [name, setName] = useState("");
   const [type, setType] = useState("System");
   const [parentId, setParentId] = useState("");
@@ -121,7 +124,7 @@ export default function App() {
   useEffect(() => { setNodes(loadInitial()); }, []);
   useEffect(() => { save(nodes); }, [nodes]);
 
-  // Auto defaults & parent auto-select to make "Tambah" smooth
+  // Auto defaults & parent selection behavior (no auto-pick first; keep last valid choice)
   useEffect(() => {
     if (type === "Subsystem") {
       const lv = Number(subsystemLevel);
@@ -129,17 +132,21 @@ export default function App() {
       const candidates = lv === 1
         ? nodes.filter((n) => n.type === "System")
         : nodes.filter((n) => n.type === "Subsystem" && Number(n.level) === lv - 1);
-      if (!candidates.some((c) => c.id === parentId)) {
-        // Auto-pilih kandidat pertama agar Level 2+ tidak bingung meski ada beberapa kandidat
-        setParentId(candidates[0]?.id || "");
+      // If current selection becomes invalid, clear it; otherwise keep it. Do not auto-select first option.
+      if (parentId && !candidates.some((c) => c.id === parentId)) {
+        setParentId("");
       }
+      return;
     }
     if (type === "Component") {
       const candidates = nodes.filter((n) => n.type === "Subsystem");
-      if (!candidates.some((c) => c.id === parentId)) {
-        setParentId(candidates[0]?.id || "");
+      if (parentId && !candidates.some((c) => c.id === parentId)) {
+        setParentId("");
       }
+      return;
     }
+    // For System type, no parent
+    if (type === "System") setParentId("");
   }, [type, subsystemLevel, nodes]);
 
   // Parent options (add form)
@@ -148,10 +155,10 @@ export default function App() {
     if (type === "Subsystem") {
       const lv = Number(subsystemLevel);
       if (!Number.isFinite(lv) || lv < 1) return [];
-      if (lv === 1) return nodes.filter((n) => n.type === "System");
-      return nodes.filter((n) => n.type === "Subsystem" && Number(n.level) === lv - 1);
+      if (lv === 1) return nodes.filter((n) => n.type === "System").slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+      return nodes.filter((n) => n.type === "Subsystem" && Number(n.level) === lv - 1).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
     }
-    if (type === "Component") { return nodes.filter((n) => n.type === "Subsystem"); }
+    if (type === "Component") { return nodes.filter((n) => n.type === "Subsystem").slice().sort((a,b)=>String(a.name).localeCompare(String(b.name))); }
     return [];
   }, [type, subsystemLevel, nodes]);
 
@@ -164,10 +171,10 @@ export default function App() {
     if (editType === "Subsystem") {
       const lv = Number(editLevel);
       if (!Number.isFinite(lv) || lv < 1) return [];
-      if (lv === 1) return nodes.filter((n) => n.type === "System" && !blocked.has(n.id));
-      return nodes.filter((n) => n.type === "Subsystem" && Number(n.level) === lv - 1 && !blocked.has(n.id));
+      if (lv === 1) return nodes.filter((n) => n.type === "System" && !blocked.has(n.id)).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+      return nodes.filter((n) => n.type === "Subsystem" && Number(n.level) === lv - 1 && !blocked.has(n.id)).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
     }
-    if (editType === "Component") { return nodes.filter((n) => n.type === "Subsystem" && !blocked.has(n.id)); }
+    if (editType === "Component") { return nodes.filter((n) => n.type === "Subsystem" && !blocked.has(n.id)).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name))); }
     return [];
   }, [editingId, editType, editLevel, nodes]);
 
@@ -178,16 +185,16 @@ export default function App() {
   // ---- CRUD ----
   function addNode() {
     try {
-      const nm = name.trim(); if (!nm) { alert("Nama tidak boleh kosong"); return; }
+      const nm = name.trim(); if (!nm) { alert("Name is required"); return; }
       const parent = nodes.find((n) => n.id === parentId) || null;
       let lvl = null;
       if (type === "Subsystem") {
-        if (!subsystemLevel.trim()) { alert("Isi Subsystem Level (angka)"); return; }
-        const v = Number(subsystemLevel); if (!Number.isFinite(v) || v < 1) { alert("Subsystem Level harus angka >= 1"); return; }
+        if (!subsystemLevel.trim()) { alert("Enter Subsystem Level (number)"); return; }
+        const v = Number(subsystemLevel); if (!Number.isFinite(v) || v < 1) { alert("Subsystem Level must be a number >= 1"); return; }
         lvl = v;
         if (!parent) {
           const needed = v === 1 ? "System" : `Subsystem L${v-1}`;
-          alert(`Pilih Parent: ${needed}`);
+          alert(`Choose Parent: ${needed}`);
           return;
         }
       }
@@ -196,9 +203,11 @@ export default function App() {
       pushHistory();
       const newNode = { id: uid(), name: nm, type, parentId: parent ? parent.id : null, level: type === "Subsystem" ? lvl : null, createdAt: Date.now() };
       setNodes((prev) => [newNode, ...prev]);
-      setName(""); if (type !== "Subsystem") setSubsystemLevel(""); setParentId("");
+      setName("");
+      if (type !== "Subsystem") setSubsystemLevel("");
+      // Do NOT reset parentId — keep last selection so next entry can use the same parent
     } catch (err) {
-      alert("Gagal menambah node: " + (err && err.message ? err.message : String(err)));
+      alert("Failed to add node: " + (err && err.message ? err.message : String(err)));
     }
   }
 
@@ -207,20 +216,20 @@ export default function App() {
   const editBlockedIds = useMemo(() => (editingId ? new Set(getDescendantIds(editingId, nodes)) : new Set()), [editingId, nodes]);
   function saveEdit() {
     if (!editingId) return;
-    const nm = editName.trim(); if (!nm) { alert("Nama tidak boleh kosong"); return; }
+    const nm = editName.trim(); if (!nm) { alert("Name is required"); return; }
     const newType = editType; const newParentId = newType === "System" ? "" : editParentId;
-    if (newParentId === editingId) { alert("Parent tidak boleh diri sendiri"); return; }
-    if (newParentId && editBlockedIds.has(newParentId)) { alert("Parent tidak boleh salah satu turunannya sendiri"); return; }
+    if (newParentId === editingId) { alert("Parent cannot be itself"); return; }
+    if (newParentId && editBlockedIds.has(newParentId)) { alert("Parent cannot be one of its own descendants"); return; }
     const parent = nodes.find((x) => x.id === newParentId) || null;
     let lvl = null;
     if (newType === "Subsystem") {
-      if (!editLevel.trim()) { alert("Isi Subsystem Level (angka)"); return; }
-      const v = Number(editLevel); if (!Number.isFinite(v) || v < 1) { alert("Subsystem Level harus angka >= 1"); return; }
+      if (!editLevel.trim()) { alert("Enter Subsystem Level (number)"); return; }
+      const v = Number(editLevel); if (!Number.isFinite(v) || v < 1) { alert("Subsystem Level must be a number >= 1"); return; }
       lvl = v;
     }
     const rule = checkParentRule(newType, lvl, parent); if (!rule.ok) { alert(rule.err); return; }
     const hasChildren = nodes.some((x) => x.parentId === editingId);
-    if (newType === "Component" && hasChildren) { alert("Tidak bisa ubah menjadi Component karena node ini memiliki anak"); return; }
+    if (newType === "Component" && hasChildren) { alert("Cannot change to Component because this node has children"); return; }
 
     pushHistory();
     setNodes((prev) => prev.map((x) => x.id === editingId ? { ...x, name: nm, type: newType, parentId: newType === "System" ? null : (newParentId || null), level: newType === "Subsystem" ? lvl : null } : x));
@@ -233,9 +242,9 @@ export default function App() {
   function confirmDelete() { if (!pendingDeleteId) return; const delIds = new Set(getDescendantIds(pendingDeleteId, nodes)); pushHistory(); setNodes((prev) => prev.filter((a) => !delIds.has(a.id))); setPendingDeleteId(""); }
 
   // ---- Utilities ----
-  function clearAll() { if (!confirm("Hapus semua data?")) return; pushHistory(); try { localStorage.removeItem(LS_KEY); } catch {} setNodes([]); }
+  function clearAll() { if (!confirm("Clear all data?")) return; pushHistory(); try { localStorage.removeItem(LS_KEY); } catch {} setNodes([]); }
   function loadSample() {
-    if (!confirm("Muat contoh data? Ini akan menambahkan data contoh.")) return;
+    if (!confirm("Load sample data? This will add sample items.")) return;
     const now = Date.now(); const rootId = uid(); const propId = uid(); const brakeId = uid(); const tractionCtlId = uid(); const invId = uid(); const mcId = uid();
     const sample = [
       { id: rootId, name: "Trainset Series 12", type: "System", parentId: null, level: null, createdAt: now },
@@ -299,7 +308,7 @@ export default function App() {
         }
       } catch (e3) {}
 
-      alert('Export gagal karena pembatasan sandbox. Coba di domain https atau aktifkan Chrome "Ask where to save each file before downloading".');
+      alert('Export failed due to sandbox limitations. Try on an HTTPS domain or enable Chrome "Ask where to save each file before downloading".');
     } catch (err) {
       alert('Export error: ' + (err && err.message ? err.message : String(err)));
     }
@@ -309,10 +318,10 @@ export default function App() {
     const f = e.target.files && e.target.files[0]; if (!f) return;
     const reader = new FileReader();
     reader.onload = () => { try {
-      const parsed = JSON.parse(String(reader.result)); if (!Array.isArray(parsed)) throw new Error("Format tidak dikenal");
+      const parsed = JSON.parse(String(reader.result)); if (!Array.isArray(parsed)) throw new Error("Unknown format");
       const sanitized = parsed.filter((x) => x && x.id && x.name && x.type).map((x) => ({ id: String(x.id), name: String(x.name), type: x.type === "System" || x.type === "Subsystem" || x.type === "Component" ? x.type : "Component", parentId: x.parentId ? String(x.parentId) : null, level: x.type === "Subsystem" && Number.isFinite(Number(x.level)) ? Math.max(1, Number(x.level)) : (x.type === "Subsystem" ? 1 : null), createdAt: Number(x.createdAt) || Date.now() }));
       pushHistory(); setNodes((prev) => [...sanitized, ...prev]); e.target.value = "";
-    } catch (err) { alert("Gagal impor: " + (err && err.message ? err.message : String(err))); } };
+    } catch (err) { alert("Import failed: " + (err && err.message ? err.message : String(err))); } };
     reader.readAsText(f);
   }
 
@@ -321,20 +330,20 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900 p-6">
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-3">
-          <h1 className="text-2xl font-bold tracking-tight">Module 1 – Asset Registry & Hierarchy (Clean Build v7.9)</h1>
-          <p className="text-slate-600 mt-1">Masukkan data aset, simpan lokal, tampil tabel & hierarki grafis. Level Subsystem dimulai dari 1.</p>
+          <h1 className="text-2xl font-bold tracking-tight">Module 1 – Asset Registry & Hierarchy (Clean Build v7.11.3)</h1>
+          <p className="text-slate-600 mt-1">Enter asset data, store locally, and display in a table & graphical hierarchy. Subsystem Level starts at 1.</p>
         </div>
 
         {/* Form */}
         <Card className="p-5 lg:col-span-1">
-          <SectionTitle>Tambah Node</SectionTitle>
+          <SectionTitle>Add Node</SectionTitle>
           <div className="space-y-3">
             <div>
-              <Label>Nama</Label>
-              <TextInput placeholder="mis. Trainset Series 12 / Brake Unit / Master Controller" value={name} onChange={(e) => setName(e.target.value)} />
+              <Label>Name</Label>
+              <TextInput placeholder="e.g. Trainset Series 12 / Brake Unit / Master Controller" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div>
-              <Label>Tipe</Label>
+              <Label>Type</Label>
               <Select value={type} onChange={(e) => setType(e.target.value)}>
                 <option>System</option>
                 <option>Subsystem</option>
@@ -342,20 +351,18 @@ export default function App() {
               </Select>
             </div>
             <div>
-              <Label>Subsystem Level {type !== "Subsystem" ? "(aktif saat Tipe = Subsystem)" : ""}</Label>
-              <TextInput type="number" min={1} step={1} placeholder="mis. 1, 2, 3" value={subsystemLevel} onChange={(e) => setSubsystemLevel(e.target.value)} disabled={type !== "Subsystem"} />
+              <Label>Subsystem Level {type !== "Subsystem" ? "(active when Type = Subsystem)" : ""}</Label>
+              <TextInput type="number" min={1} step={1} placeholder="e.g. 1, 2, 3" value={subsystemLevel} onChange={(e) => setSubsystemLevel(e.target.value)} disabled={type !== "Subsystem"} />
             </div>
             <div>
-              <Label>Parent {type === "System" ? "(otomatis kosong)" : ""}</Label>
+              <Label>Parent {type === "System" ? "(auto empty)" : ""}</Label>
               <Select value={parentId} onChange={(e) => setParentId(e.target.value)} disabled={type === "System"}>
-                {type === "System" ? <option value="">— Tidak ada (Root) —</option> : null}
+                {type === "System" ? <option value="">— None (Root) —</option> : null}
                 {addParentOptions.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
               </Select>
             </div>
             <div className="flex items-center gap-2">
-              <Button onClick={addNode}>Tambah</Button>
-              <Button className="bg-white text-slate-700 border-slate-300" onClick={loadSample}>Muat Contoh</Button>
-              <Button className="bg-white text-rose-700 border-rose-300" onClick={clearAll}>Hapus Semua</Button>
+              <Button onClick={addNode}>Add</Button><Button className="bg-white text-rose-700 border-rose-300" onClick={clearAll}>Clear All</Button>
             </div>
           </div>
         </Card>
@@ -363,15 +370,17 @@ export default function App() {
         {/* Table */}
         <Card className="p-5 lg:col-span-2">
           <div className="flex items-center justify-between mb-3">
-            <SectionTitle>Data Tabel</SectionTitle>
-            <div className="flex items-center gap-2">
-              <TextInput placeholder="Cari nama/tipe/ID…" value={filter} onChange={(e) => setFilter(e.target.value)} />
-              <Button className="bg-white text-slate-700 border-slate-300" onClick={() => { if (history.length === 0) { alert('Belum ada aksi untuk di-undo'); return; } const next = [...history]; const last = next.shift(); setHistory(next); setNodes(last || []); }}>Undo</Button>
+            <SectionTitle>Asset Table</SectionTitle>
+            <div className="flex items-center gap-2 flex-wrap justify-end">              <div className="w-56 sm:w-64 md:w-80">
+                <TextInput placeholder="Search name/type/ID…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+              </div>
+              {/* Undo button removed as requested */}
               <Button className="bg-white text-slate-700 border-slate-300" onClick={exportJSON}>Export JSON</Button>
               <label className="cursor-pointer inline-block">
                 <span className="rounded-2xl px-4 py-2 border border-slate-300 bg-white">Import JSON</span>
                 <input type="file" accept="application/json" className="hidden" onChange={importJSON} />
               </label>
+              {/* Import from URL button removed as requested */}
             </div>
           </div>
 
@@ -382,18 +391,18 @@ export default function App() {
                 <div className="text-xs text-slate-500">ID: <span className="font-mono">{editingId}</span></div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-                <div className="md:col-span-2"><Label>Nama</Label><TextInput value={editName} onChange={(e) => setEditName(e.target.value)} /></div>
-                <div><Label>Tipe</Label><Select value={editType} onChange={(e) => setEditType(e.target.value)}><option>System</option><option>Subsystem</option><option>Component</option></Select></div>
-                <div><Label>Subsystem Level {editType !== "Subsystem" ? "(aktif saat Tipe = Subsystem)" : ""}</Label><TextInput type="number" min={1} step={1} value={editLevel} onChange={(e) => setEditLevel(e.target.value)} disabled={editType !== "Subsystem"} /></div>
-                <div><Label>Parent {editType === "System" ? "(otomatis kosong)" : ""}</Label><Select value={editType === "System" ? "" : editParentId} onChange={(e) => setEditParentId(e.target.value)} disabled={editType === "System"}>{editType === "System" ? <option value="">— Tidak ada (Root) —</option> : null}{editParentOptions.map((p) => (<option key={p.id} value={p.id}>{p.name} ({p.type})</option>))}</Select></div>
+                <div className="md:col-span-2"><Label>Name</Label><TextInput value={editName} onChange={(e) => setEditName(e.target.value)} /></div>
+                <div><Label>Type</Label><Select value={editType} onChange={(e) => setEditType(e.target.value)}><option>System</option><option>Subsystem</option><option>Component</option></Select></div>
+                <div><Label>Subsystem Level {editType !== "Subsystem" ? "(active when Type = Subsystem)" : ""}</Label><TextInput type="number" min={1} step={1} value={editLevel} onChange={(e) => setEditLevel(e.target.value)} disabled={editType !== "Subsystem"} /></div>
+                <div><Label>Parent {editType === "System" ? "(auto empty)" : ""}</Label><Select value={editType === "System" ? "" : editParentId} onChange={(e) => setEditParentId(e.target.value)} disabled={editType === "System"}>{editType === "System" ? <option value="">— None (Root) —</option> : null}{editParentOptions.map((p) => (<option key={p.id} value={p.id}>{p.name} ({p.type})</option>))}</Select></div>
               </div>
-              <div className="mt-2 flex gap-2"><Button onClick={saveEdit}>Simpan</Button><Button className="bg-white text-slate-700 border-slate-300" onClick={cancelEdit}>Batal</Button></div>
+              <div className="mt-2 flex gap-2"><Button onClick={saveEdit}>Save</Button><Button className="bg-white text-slate-700 border-slate-300" onClick={cancelEdit}>Cancel</Button></div>
             </div>
           ) : null}
 
           <div className="overflow-auto rounded-xl border">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-100"><tr><th className="text-left p-2 font-semibold">Nama</th><th className="text-left p-2 font-semibold">Tipe</th><th className="text-left p-2 font-semibold">Level</th><th className="text-left p-2 font-semibold">Parent</th><th className="text-left p-2 font-semibold">ID</th><th className="text-left p-2 font-semibold">Dibuat</th><th className="text-left p-2 font-semibold">Aksi</th></tr></thead>
+              <thead className="bg-slate-100"><tr><th className="text-left p-2 font-semibold">Name</th><th className="text-left p-2 font-semibold">Type</th><th className="text-left p-2 font-semibold">Level</th><th className="text-left p-2 font-semibold">Parent</th><th className="text-left p-2 font-semibold">ID</th><th className="text-left p-2 font-semibold">Created</th><th className="text-left p-2 font-semibold">Actions</th></tr></thead>
               <tbody>
                 {filtered.map((n) => (
                   <tr key={n.id} className="border-t">
@@ -403,10 +412,10 @@ export default function App() {
                     <td className="p-2">{(nodes.find((x) => x.id === n.parentId) || {}).name || "—"}</td>
                     <td className="p-2 font-mono text-xs">{n.id}</td>
                     <td className="p-2">{new Date(n.createdAt).toLocaleString()}</td>
-                    <td className="p-2"><div className="flex gap-2"><Button className="bg-white text-slate-700 border-slate-300" onClick={() => beginEdit(n)}>Edit</Button>{pendingDeleteId === n.id ? (<><Button className="bg-white text-rose-700 border-rose-300" onClick={confirmDelete}>Yakin Hapus?</Button><Button className="bg-white text-slate-700 border-slate-300" onClick={cancelDelete}>Batal</Button></>) : (<Button className="bg-white text-rose-700 border-rose-300" onClick={() => askDelete(n)}>Hapus</Button>)}</div></td>
+                    <td className="p-2"><div className="flex gap-2"><Button className="bg-white text-slate-700 border-slate-300" onClick={() => beginEdit(n)}>Edit</Button>{pendingDeleteId === n.id ? (<><Button className="bg-white text-rose-700 border-rose-300" onClick={confirmDelete}>Confirm Delete?</Button><Button className="bg-white text-slate-700 border-slate-300" onClick={cancelDelete}>Cancel</Button></>) : (<Button className="bg-white text-rose-700 border-rose-300" onClick={() => askDelete(n)}>Delete</Button>)}</div></td>
                   </tr>
                 ))}
-                {filtered.length === 0 ? (<tr><td className="p-4 text-center text-slate-500" colSpan={7}>Belum ada data</td></tr>) : null}
+                {filtered.length === 0 ? (<tr><td className="p-4 text-center text-slate-500" colSpan={7}>No data yet</td></tr>) : null}
               </tbody>
             </table>
           </div>
@@ -414,112 +423,28 @@ export default function App() {
 
         {/* Hierarchy */}
         <Card className="p-5 lg:col-span-3">
-          <SectionTitle>System Hierarchy (Grafis)</SectionTitle>
+          <SectionTitle>System Hierarchy (Graphical)</SectionTitle>
           {tree.length === 0 ? (
-            <p className="text-slate-500">Belum ada node. Tambahkan System terlebih dahulu, lalu Subsystem/Component.</p>
+            <p className="text-slate-500">No nodes yet. Add a System first, then Subsystems/Components.</p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <h3 className="font-semibold mb-2">Pohon Hierarki</h3>
+                <h3 className="font-semibold mb-2">Hierarchy Tree</h3>
                 <Tree nodes={tree} />
               </div>
               <div>
-                <h3 className="font-semibold mb-2">Keterangan</h3>
+                <h3 className="font-semibold mb-2">Notes</h3>
                 <ul className="text-sm list-disc pl-5 space-y-1 text-slate-700">
-                  <li><b>System</b>: akar tertinggi (mis. Trainset, Depot System).</li>
-                  <li><b>Subsystem</b>: bagian dari System (mis. Propulsion, Brake). Field Level dimulai dari 1.</li>
-                  <li><b>Component</b>: unit terkecil yang bisa diganti/di-maintain (mis. Traction Inverter, Master Controller).</li>
+                  <li><b>System</b>: top/root level (e.g., Trainset, Depot System).</li>
+                  <li><b>Subsystem</b>: parts under System (e.g., Propulsion, Brake). <i>Level</i> starts at 1.</li>
+                  <li><b>Component</b>: smallest maintainable unit (e.g., Traction Inverter, Master Controller).</li>
                 </ul>
               </div>
             </div>
           )}
         </Card>
 
-        {/* Dev tests (existing) */}
-        <Card className="p-5 lg:col-span-3">
-          <SectionTitle>Dev Tests</SectionTitle>
-          <div className="text-sm text-slate-600 mb-2">Validasi aturan parent, utilitas pohon, dan environment ekspor (tidak mengubah data kamu).</div>
-          <div className="flex gap-2 mb-2 flex-wrap">
-            <Button className="bg-white text-slate-700 border-slate-300" onClick={() => {
-              const sys = { id: 'S', type:'System', name:'Root', level:null };
-              const s1 = { id: 'A', type:'Subsystem', name:'L1', level:1, parentId:'S' };
-              const s2 = { id: 'B', type:'Subsystem', name:'L2', level:2, parentId:'A' };
-              const c  = { id: 'C', type:'Component', name:'Comp', level:null, parentId:'B' };
-              const list = [sys, s1, s2, c];
-              const t1 = checkParentRule('Subsystem', 1, sys).ok;
-              const t2 = !checkParentRule('Subsystem', 2, sys).ok;
-              const t3 = checkParentRule('Subsystem', 2, s1).ok;
-              const t4 = checkParentRule('Component', null, s2).ok;
-              const t5 = !checkParentRule('Component', null, sys).ok;
-              const tree = toTree(list);
-              const okTree = tree.length === 1 && tree[0].children.length === 1 && tree[0].children[0].children.length === 1;
-              const msg = [
-                'Tests:',
-                'Sub L1 -> System: ' + (t1 ? 'PASS' : 'FAIL'),
-                'Sub L2 -> System (should fail): ' + (t2 ? 'PASS' : 'FAIL'),
-                'Sub L2 -> Sub L1: ' + (t3 ? 'PASS' : 'FAIL'),
-                'Component -> Subsystem: ' + (t4 ? 'PASS' : 'FAIL'),
-                'Component -> System (should fail): ' + (t5 ? 'PASS' : 'FAIL'),
-                'Tree structure: ' + (okTree ? 'PASS' : 'FAIL'),
-              ].join('\n');
-              alert(msg);
-            }}>Run Tests</Button>
-            <Button className="bg-white text-slate-700 border-slate-300" onClick={() => {
-              const sys = { id: 'S', type:'System', name:'Root', level:null };
-              const s1 = { id: 'A', type:'Subsystem', name:'L1', level:1, parentId:'S' };
-              const s2 = { id: 'B', type:'Subsystem', name:'L2', level:2, parentId:'A' };
-              const orphan = { id: 'X', type:'Subsystem', name:'Orphan L2', level:2, parentId:'NOPE' };
-              const t6 = !checkParentRule('Subsystem', 3, s1).ok;
-              const t7 = (function(){ const ids = new Set(getDescendantIds('A', [s1, s2])); return ids.has('A') && ids.has('B'); })();
-              const tree = toTree([sys, s1, s2, orphan]);
-              const t8 = tree.some(n => n.id === 'X');
-              const env = [
-                'isSecureContext=' + (self.isSecureContext ? 'true' : 'false'),
-                'showSaveFilePicker=' + (typeof window.showSaveFilePicker === 'function' ? 'yes' : 'no'),
-                'UA contains Chrome=' + (/Chrome\//.test(navigator.userAgent) ? 'yes' : 'no'),
-              ].join(' | ');
-              const msg = [
-                'More Tests:',
-                'Sub L3 -> Sub L1 (should fail): ' + (t6 ? 'PASS' : 'FAIL'),
-                'getDescendantIds A contains A & B: ' + (t7 ? 'PASS' : 'FAIL'),
-                'Orphan becomes root in tree: ' + (t8 ? 'PASS' : 'FAIL'),
-                'Env: ' + env,
-              ].join('\n');
-              alert(msg);
-            }}>Run More Tests</Button>
-          </div>
-          <div className="text-xs text-slate-500">Agar <b>dialog Save selalu muncul</b>, Chrome membutuhkan <b>konteks aman (https)</b> dan fitur <b>File System Access API</b>. Jika tidak tersedia, browser akan mengunduh ke folder default atau membuka tab baru.</div>
-        </Card>
-
-        {/* Extra Edge Tests (new, non-breaking) */}
-        <Card className="p-5 lg:col-span-3">
-          <SectionTitle>Edge Tests</SectionTitle>
-          <div className="text-sm text-slate-600 mb-2">Tambahan kasus tepi: validasi anti-siklus & parent invalid.</div>
-          <div className="flex gap-2 mb-2 flex-wrap">
-            <Button className="bg-white text-slate-700 border-slate-300" onClick={() => {
-              // Build small chain: S -> A(L1) -> B(L2)
-              const sys = { id: 'S', type:'System', name:'Root', level:null };
-              const a = { id: 'A', type:'Subsystem', name:'L1', level:1, parentId:'S' };
-              const b = { id: 'B', type:'Subsystem', name:'L2', level:2, parentId:'A' };
-              // Try illegal: make S child of B (would form a cycle) ⇒ should be blocked by editBlockedIds logic (simulated)
-              const blocked = new Set(['S','A','B']);
-              const cyclePrevented = blocked.has('S');
-              // Check parent rule failures
-              const badParent1 = checkParentRule('Subsystem', 2, sys).ok === false; // L2 cannot attach to System
-              const badParent2 = checkParentRule('Component', null, sys).ok === false; // Component cannot attach to System
-              const okAttach = checkParentRule('Component', null, b).ok === true; // Component may attach to Subsystem
-              const msg = [
-                'Edge Tests:',
-                'Cycle prevention mock: ' + (cyclePrevented ? 'PASS' : 'FAIL'),
-                'Sub L2 -> System should fail: ' + (badParent1 ? 'PASS' : 'FAIL'),
-                'Component -> System should fail: ' + (badParent2 ? 'PASS' : 'FAIL'),
-                'Component -> Subsystem should pass: ' + (okAttach ? 'PASS' : 'FAIL'),
-              ].join('\n');
-              alert(msg);
-            }}>Run Edge Tests</Button>
-          </div>
-        </Card>
-      </div>
+        </div>
     </div>
   );
 }
