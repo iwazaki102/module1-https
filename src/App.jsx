@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-// ===== Module 1 – Asset Registry & Hierarchy (Clean Build v7.13.6) =====
+// ===== Module 1 – Asset Registry & Hierarchy (Clean Build v7.13.7) =====
+// v7.13.7 – Remove "Keep fields after Add" checkbox (UI only). Behavior unchanged: after Add → Name cleared; Type kept; Level cleared only if Type ≠ Subsystem.
 // v7.13.6 – Fix: incomplete <tbody>{filtered.map…} block causing syntax error; hardened table rendering and closed all JSX tags.
 // v7.13.5 – Delete warning when node has children (cascade confirmation). Fixed truncated table action JSX.
 // v7.13.4 – Fix unterminated JSX </Button> for Edit action in table; no logic changes.
 // v7.13.3 – Fix unterminated JSX </Button> in table actions; keep all features stable.
-// v7.13.2 – Fix unterminated JSX comment; auto-select Parent when exactly one candidate exists; add tests for name indexing.
+// v7.13.2 – Fix unterminated JSX comment; ensure auto-select Parent when exactly one candidate exists; add tests for name indexing.
 // v7.13.1 – Auto-select Parent when exactly one valid candidate exists (L1→System, Ln→L(n-1)); clearer messages when no parent exists; minor UX polish.
 // v7.13.0 – Enforce single System; duplicate policy (overwrite or index like Router(1)); UI guards; extra tests.
 // Baseline for rollback remains: v7.11.3
@@ -13,7 +14,7 @@ import React, { useEffect, useMemo, useState } from "react";
 // Storage keys
 const LS_KEY = "module1_asset_nodes";
 const LS_PREF = {
-  keepFields: "module1_pref_keep_fields",
+  // keepFields removed in v7.13.7 (UI only)
   showTree: "module1_pref_show_tree",
   activeTab: "module1_pref_active_tab",
   collapsed: "module1_pref_collapsed_ids",
@@ -32,8 +33,7 @@ function readKey(key) {
   try { const raw = localStorage.getItem(key); if (!raw) return null; const v = JSON.parse(raw); return v; } catch { return null; }
 }
 function readArray(key) { try { const raw = localStorage.getItem(key); if (!raw) return null; const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : null; } catch { return null; } }
-function save(nodes) { try { localStorage.setItem(LS_KEY, JSON.stringify(nodes)); } catch {}
-}
+function save(nodes) { try { localStorage.setItem(LS_KEY, JSON.stringify(nodes)); } catch {} }
 function migrateArray(arr, srcKey) {
   return arr.map((x) => {
     const type = x && typeof x.type === "string" ? x.type : "Component";
@@ -160,7 +160,9 @@ function __buildTests() {
   const next2 = nextIndexedName('Pump', []);
   results.push(['nextIndexedName empty -> Pump(1)', next2 === 'Pump(1)']);
 
+  // Delete cascade size
   results.push(['Delete cascade count from A is 3', (new Set(getDescendantIds('A', list))).size === 3]);
+
   const pass = results.filter(r=>r[1]).length;
   return { pass, total: results.length, results };
 }
@@ -228,7 +230,6 @@ export default function App() {
   const [typeFilter, setTypeFilter] = useState("All");
   const [levelFilter, setLevelFilter] = useState("All");
   const [importPolicy, setImportPolicy] = useState(() => readKey(LS_PREF.importPolicy) || "skip"); // 'skip' | 'update'
-  const [keepFields, setKeepFields] = useState(() => !!readKey(LS_PREF.keepFields));
 
   const [editingId, setEditingId] = useState("");
   const [editName, setEditName] = useState("");
@@ -250,7 +251,6 @@ export default function App() {
   // init
   useEffect(() => { setNodes(loadInitial()); }, []);
   useEffect(() => { save(nodes); }, [nodes]);
-  useEffect(() => { try { localStorage.setItem(LS_PREF.keepFields, JSON.stringify(!!keepFields)); } catch {} }, [keepFields]);
   useEffect(() => { try { localStorage.setItem(LS_PREF.showTree, JSON.stringify(!!showTree)); } catch {} }, [showTree]);
   useEffect(() => { try { localStorage.setItem(LS_PREF.activeTab, JSON.stringify(activeTab)); } catch {} }, [activeTab]);
   useEffect(() => { try { localStorage.setItem(LS_PREF.collapsed, JSON.stringify(Array.from(collapsedIds))); } catch {} }, [collapsedIds]);
@@ -258,7 +258,7 @@ export default function App() {
 
   // expose non-UI tests (developer only)
   useEffect(() => {
-    try { window.__module1RunTests = __buildTests; } catch {}
+    try { (window as any).__module1RunTests = __buildTests; } catch {}
   }, []);
 
   // Auto defaults & parent selection behavior (keep last valid choice)
@@ -372,7 +372,8 @@ export default function App() {
         if (overwrite) {
           pushHistory();
           setNodes(prev => prev.map(x => x.id === dupe.id ? { ...x, name: nm, type, parentId: parent ? parent.id : null, level: type === 'Subsystem' ? lvl : null, createdAt: Date.now() } : x));
-          if (!keepFields) { setName(""); if (type !== 'Subsystem') setSubsystemLevel(""); }
+          // Clear fields (UI behavior): Name always; Level only if type ≠ Subsystem; Type is kept
+          setName(""); if (type !== 'Subsystem') setSubsystemLevel("");
           return;
         } else {
           // auto-index
@@ -392,7 +393,8 @@ export default function App() {
       pushHistory();
       const newNode = { id: uid(), name: key.name || nm, type, parentId: parent ? parent.id : null, level: type === "Subsystem" ? lvl : null, createdAt: Date.now() };
       setNodes((prev) => [newNode, ...prev]);
-      if (!keepFields) { setName(""); if (type !== "Subsystem") setSubsystemLevel(""); }
+      // Clear fields (UI behavior): Name always; Level only if type ≠ Subsystem; Type is kept
+      setName(""); if (type !== "Subsystem") setSubsystemLevel("");
     } catch (err) { alert("Failed to add node: " + (err && err.message ? err.message : String(err))); }
   }
 
@@ -604,7 +606,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900 p-6">
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-3">
-          <h1 className="text-2xl font-bold tracking-tight">Module 1 – Asset Registry & Hierarchy (Clean Build v7.13.6)</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Module 1 – Asset Registry & Hierarchy (Clean Build v7.13.7)</h1>
           <p className="text-slate-600 mt-1">Enter asset data, store locally, and display in a table & graphical hierarchy. Subsystem Level starts at 1.</p>
         </div>
 
@@ -634,12 +636,6 @@ export default function App() {
                 {type === "System" ? <option value="">— None (Root) —</option> : null}
                 {addParentOptions.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
               </Select>
-            </div>
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input type="checkbox" checked={keepFields} onChange={(e)=>setKeepFields(e.target.checked)} />
-                Keep fields after Add
-              </label>
             </div>
             <div className="flex items-center gap-2">
               <Button onClick={addNode}>Add</Button>
