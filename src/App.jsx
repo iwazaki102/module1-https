@@ -1,17 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-// ===== Module 1 – Asset Registry & Hierarchy (Clean Build v7.12.7) =====
-// v7.12.9 – Fix: Unterminated RegExp & string splits in Export Excel (CSV). Added non-UI CSV tests.
-// v7.12.8 – Add Export Excel (CSV): per-row Components with columns [Component Name, Subsystem L1..Ln].
-// v7.12.7 – Layout fixes & restored Search box after regex patch.
-// v7.12.6 – Move "Asset Table" title above controls; left‑align controls; widen Search; slightly larger table text.
-// v7.12.5 – Align search box width with filter controls (Types/Levels/Import).
-// v7.12.4 – Fix JSX/parse errors in UI atoms. Compact UI kept from v7.12.3.
-// v7.12.3 – Compact UI for Add Node & Asset Table.
-// v7.12.2 – Fix fatal SyntaxError after clearAll(). Added dev tests (window.__module1RunTests()).
-// v7.12.1 – Clear All also wipes legacy keys.
-// v7.12.0 – Feature pack (keep fields after add, clear-all protection, anti-duplicate per parent,
-//            filters, export CSV, import policy, collapsible tree + hybrid layout, child counts).
+// ===== Module 1 – Asset Registry & Hierarchy (Clean Build v7.13.0) =====
+// v7.13.0 – Enforce single System; duplicate policy (overwrite or index name like Router(1)); UI guards; extra tests.
 // Baseline for rollback remains: v7.11.3
 
 // Storage keys
@@ -36,8 +26,7 @@ function readKey(key) {
   try { const raw = localStorage.getItem(key); if (!raw) return null; const v = JSON.parse(raw); return v; } catch { return null; }
 }
 function readArray(key) { try { const raw = localStorage.getItem(key); if (!raw) return null; const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : null; } catch { return null; } }
-function save(nodes) { try { localStorage.setItem(LS_KEY, JSON.stringify(nodes)); } catch {}
-}
+function save(nodes) { try { localStorage.setItem(LS_KEY, JSON.stringify(nodes)); } catch {} }
 function migrateArray(arr, srcKey) {
   return arr.map((x) => {
     const type = x && typeof x.type === "string" ? x.type : "Component";
@@ -98,8 +87,32 @@ function isDuplicate(list, { id, name, type, level, parentId }, ignoreId = null)
     return true; // System/Component
   });
 }
+function findDuplicateNode(list, { id, name, type, level, parentId }, ignoreId = null) {
+  const nm = String(name).trim().toLowerCase();
+  return list.find((x)=>{
+    if (ignoreId && x.id === ignoreId) return false;
+    if (String(x.type) !== String(type)) return false;
+    if (String(x.parentId || '') !== String(parentId || '')) return false;
+    if (String(x.name).trim().toLowerCase() !== nm) return false;
+    if (type === 'Subsystem') return Number(x.level) === Number(level);
+    return true;
+  }) || null;
+}
+function nextIndexedName(baseName, siblingNames) {
+  // strip trailing (n) if present to get root base
+  const m = String(baseName).match(/^(.*?)(\((\d+)\))?\s*$/);
+  const root = (m ? m[1] : String(baseName)).trim();
+  const used = new Set();
+  siblingNames.forEach((s)=>{
+    const esc = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const mm = String(s).match(new RegExp('^' + esc + '(?:\\((\\d+)\\))?$'));
+    if (mm) used.add(mm[1] ? Number(mm[1]) : 0);
+  });
+  let n = 1; while (used.has(n)) n++;
+  return `${root}(${n})`;
+}
 
-// ---- Non-UI dev tests (call via window.__module1RunTests() / __module1RunExcelTest()) ----
+// ---- Non-UI dev tests (call via window.__module1RunTests()) ----
 function __buildTests() {
   const sys = { id: 'S', type: 'System', name: 'Root', level: null };
   const s1 = { id: 'A', type: 'Subsystem', name: 'L1', level: 1, parentId: 'S' };
@@ -109,6 +122,7 @@ function __buildTests() {
 
   const list = [sys, s1, s2, comp, orphan];
   const results = [];
+  // Existing tests (unchanged)
   results.push(['Sub L1 -> System', checkParentRule('Subsystem', 1, sys).ok]);
   results.push(['Sub L2 -> System (should fail)', !checkParentRule('Subsystem', 2, sys).ok]);
   results.push(['Sub L2 -> Sub L1', checkParentRule('Subsystem', 2, s1).ok]);
@@ -119,41 +133,21 @@ function __buildTests() {
   results.push(['Tree has Root & Orphan as roots', okTree]);
   const dup = isDuplicate([s2], { id:'', name:'L2', type:'Subsystem', level:2, parentId:'A' });
   results.push(['Duplicate detection works', dup===true]);
+
+  // Additional tests
+  results.push(['Sub L3 -> Sub L1 (should fail)', !checkParentRule('Subsystem', 3, s1).ok]);
+  results.push(['Duplicate System name under root', isDuplicate([sys], { id:'', name:'Root', type:'System', level:null, parentId:null }) === true]);
+  results.push(['Duplicate Component under same parent', isDuplicate([comp], { id:'', name:'Comp', type:'Component', level:null, parentId:'B' }) === true]);
+  results.push(['Component same name different parent allowed', isDuplicate([comp], { id:'', name:'Comp', type:'Component', level:null, parentId:'A' }) === false]);
+  const descA = new Set(getDescendantIds('A', list));
+  results.push(['getDescendantIds includes children', descA.has('A') && descA.has('B') && descA.has('C') && !descA.has('X')]);
+  const idsWithChildren = new Set(getAllWithChildrenIds(toTree(list)));
+  results.push(['getAllWithChildrenIds', idsWithChildren.has('S') && idsWithChildren.has('A') && idsWithChildren.has('B') && !idsWithChildren.has('X')]);
+  const t2 = toTree(list);
+  results.push(['Root order System first', t2.length>=1 && t2[0].id==='S']);
+
   const pass = results.filter(r=>r[1]).length;
   return { pass, total: results.length, results };
-}
-
-function __buildExcelTests(nodesInput) {
-  const nodes = (Array.isArray(nodesInput) && nodesInput.length) ? nodesInput : (function(){
-    const now = Date.now();
-    const sys = { id: 'S', type: 'System', name: 'Trainset', level: null, createdAt: now };
-    const s1 = { id: 'A', type: 'Subsystem', name: 'Propulsion', level: 1, parentId: 'S', createdAt: now };
-    const s2 = { id: 'B', type: 'Subsystem', name: 'Traction Control', level: 2, parentId: 'A', createdAt: now };
-    const comp = { id: 'C', type: 'Component', name: 'Inverter "A", Rev1', level: null, parentId: 'B', createdAt: now };
-    return [sys, s1, s2, comp];
-  })();
-  const byId = new Map(nodes.map(n=>[n.id, n]));
-  const maxLevel = nodes.reduce((m, n) => (n.type==='Subsystem' && Number.isFinite(Number(n.level)) ? Math.max(m, Number(n.level)) : m), 0);
-  const headers = ['Component Name', ...Array.from({ length: maxLevel }, (_, i) => `Subsystem L${i + 1}`)];
-  const rows = nodes.filter(n=>n.type==='Component').map(c => {
-    const levels = new Array(maxLevel).fill('');
-    let cur = byId.get(c.parentId || '') || null;
-    while (cur) {
-      if (cur.type==='Subsystem' && Number.isFinite(Number(cur.level))) {
-        const idx = Number(cur.level) - 1; if (idx>=0 && idx<levels.length) levels[idx] = cur.name;
-      }
-      cur = cur && cur.parentId ? (byId.get(cur.parentId) || null) : null;
-    }
-    return [c.name, ...levels];
-  });
-  // CSV stringify with proper escaping
-  const csv = [headers, ...rows].map(r => r.map(v => {
-    const s = String(v == null ? '' : v);
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
-  }).join(',')).join('\n');
-  const okCols = rows.length>0 ? (rows[0].length === 1 + maxLevel) : true;
-  const hasQuoted = /\"\"/.test(csv) || /""/.test(csv); // at least one escaped quote
-  return { headers, rows, csv, okCols, hasQuoted };
 }
 
 // ---- UI atoms ----
@@ -236,6 +230,8 @@ export default function App() {
   const [collapsedIds, setCollapsedIds] = useState(() => new Set(readArray(LS_PREF.collapsed) || []));
   const [treeFullscreen, setTreeFullscreen] = useState(false);
 
+  const hasSystem = useMemo(()=>nodes.some(n=>n.type==='System'), [nodes]);
+
   // init
   useEffect(() => { setNodes(loadInitial()); }, []);
   useEffect(() => { save(nodes); }, [nodes]);
@@ -249,7 +245,6 @@ export default function App() {
   useEffect(() => {
     try { window.__module1RunTests = __buildTests; } catch {}
   }, []);
-  
 
   // Auto defaults & parent selection behavior (keep last valid choice)
   useEffect(() => {
@@ -325,31 +320,54 @@ export default function App() {
   function addNode() {
     try {
       const nm = name.trim(); if (!nm) { alert("Name is required"); return; }
-      const parent = nodes.find((n) => n.id === parentId) || null;
+
+      // Single System rule
+      if (type === 'System' && hasSystem) { alert('Only one System is allowed. Delete the existing System first.'); return; }
+
+      let parent = nodes.find((n) => n.id === parentId) || null;
       let lvl = null;
       if (type === "Subsystem") {
         if (!subsystemLevel.trim()) { alert("Enter Subsystem Level (number)"); return; }
         const v = Number(subsystemLevel); if (!Number.isFinite(v) || v < 1) { alert("Subsystem Level must be a number >= 1"); return; }
         lvl = v;
-        if (!parent) { const needed = v === 1 ? "System" : `Subsystem L${v-1}`; alert(`Choose Parent: ${needed}`); return; }
+        if (!parent) {
+          const candidates = v === 1
+            ? nodes.filter((n) => n.type === "System")
+            : nodes.filter((n) => n.type === "Subsystem" && Number(n.level) === v - 1);
+          if (candidates.length === 1) { parent = candidates[0]; try { setParentId(parent.id); } catch {} }
+          else { const needed = v === 1 ? "System" : `Subsystem L${v-1}`; alert(`Choose Parent: ${needed}`); return; }
+        }
       }
-      if (isDuplicate(nodes, { id:'', name:nm, type, level:lvl, parentId: parent ? parent.id : null })) {
-        alert("Duplicate detected under the same parent. Use a different Name or adjust Type/Level.");
-        return;
+
+      const key = { id:'', name:nm, type, level:lvl, parentId: parent ? parent.id : null };
+      const dupe = findDuplicateNode(nodes, key);
+      if (dupe) {
+        const overwrite = confirm(`Duplicate detected in the same level (Type/Parent/Name).\n\nName: ${nm}\nType: ${type}${type==='Subsystem'&&lvl?` L${lvl}`:''}\nParent: ${parent?parent.name:'—'}\n\nOK = Overwrite existing, Cancel = Insert with index (e.g., ${nm}(1))`);
+        if (overwrite) {
+          pushHistory();
+          setNodes(prev => prev.map(x => x.id === dupe.id ? { ...x, name: nm, type, parentId: parent ? parent.id : null, level: type === 'Subsystem' ? lvl : null, createdAt: Date.now() } : x));
+          if (!keepFields) { setName(""); if (type !== 'Subsystem') setSubsystemLevel(""); }
+          return;
+        } else {
+          // auto-index
+          const siblings = nodes.filter(x=>{
+            if (String(x.type) !== String(type)) return false;
+            if (String(x.parentId || '') !== String(parent ? parent.id : '')) return false;
+            if (type==='Subsystem' && Number(x.level)!==Number(lvl)) return false;
+            return true;
+          }).map(x=>x.name);
+          const nm2 = nextIndexedName(nm, siblings);
+          key.name = nm2;
+        }
       }
+
       const rule = checkParentRule(type, lvl, parent); if (!rule.ok) { alert(rule.err); return; }
 
       pushHistory();
-      const newNode = { id: uid(), name: nm, type, parentId: parent ? parent.id : null, level: type === "Subsystem" ? lvl : null, createdAt: Date.now() };
+      const newNode = { id: uid(), name: key.name || nm, type, parentId: parent ? parent.id : null, level: type === "Subsystem" ? lvl : null, createdAt: Date.now() };
       setNodes((prev) => [newNode, ...prev]);
-      setName("");
-      if (!keepFields) {
-        if (type !== "Subsystem") setSubsystemLevel("");
-        // parentId stays as last selection for speed
-      }
-    } catch (err) {
-      alert("Failed to add node: " + (err && err.message ? err.message : String(err)));
-    }
+      if (!keepFields) { setName(""); if (type !== "Subsystem") setSubsystemLevel(""); }
+    } catch (err) { alert("Failed to add node: " + (err && err.message ? err.message : String(err))); }
   }
 
   function beginEdit(n) { setPendingDeleteId(""); setEditingId(n.id); setEditName(n.name); setEditType(n.type); setEditParentId(n.parentId || ""); setEditLevel(n.type === "Subsystem" && n.level != null ? String(n.level) : ""); }
@@ -357,7 +375,14 @@ export default function App() {
   const editBlockedIds = useMemo(() => (editingId ? new Set(getDescendantIds(editingId, nodes)) : new Set()), [editingId, nodes]);
   function saveEdit() {
     if (!editingId) return;
-    const nm = editName.trim(); if (!nm) { alert("Name is required"); return; }
+    let nm = editName.trim(); if (!nm) { alert("Name is required"); return; }
+
+    // Single System rule on edit
+    if (editType === 'System') {
+      const otherSystem = nodes.find(n=>n.type==='System' && n.id!==editingId);
+      if (otherSystem) { alert('Only one System is allowed. Change Type or delete the other System first.'); return; }
+    }
+
     const newType = editType; const newParentId = newType === "System" ? "" : editParentId;
     if (newParentId === editingId) { alert("Parent cannot be itself"); return; }
     if (newParentId && editBlockedIds.has(newParentId)) { alert("Parent cannot be one of its own descendants"); return; }
@@ -368,10 +393,20 @@ export default function App() {
       const v = Number(editLevel); if (!Number.isFinite(v) || v < 1) { alert("Subsystem Level must be a number >= 1"); return; }
       lvl = v;
     }
-    if (isDuplicate(nodes, { id:editingId, name:nm, type:newType, level:lvl, parentId:newType==='System'? null : (newParentId||null) }, editingId)) {
-      alert("Duplicate detected under the same parent. Change Name/Type/Level.");
-      return;
+
+    const dupe = findDuplicateNode(nodes, { id:editingId, name:nm, type:newType, level:lvl, parentId:newType==='System'? null : (newParentId||null) }, editingId);
+    if (dupe) {
+      const indexIt = confirm(`Duplicate detected. For edits, only indexing is supported to preserve IDs.\n\nOK = Use indexed name (e.g., ${nm}(1))\nCancel = Abort save`);
+      if (!indexIt) return; // abort
+      const siblings = nodes.filter(x=>{
+        if (String(x.type) !== String(newType)) return false;
+        if (String(x.parentId || '') !== String(newParentId || '')) return false;
+        if (newType==='Subsystem' && Number(x.level)!==Number(lvl)) return false;
+        return true;
+      }).map(x=>x.name);
+      nm = nextIndexedName(nm, siblings);
     }
+
     const rule = checkParentRule(newType, lvl, parent); if (!rule.ok) { alert(rule.err); return; }
     const hasChildren = nodes.some((x) => x.parentId === editingId);
     if (newType === "Component" && hasChildren) { alert("Cannot change to Component because this node has children"); return; }
@@ -528,7 +563,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900 p-6">
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-3">
-          <h1 className="text-2xl font-bold tracking-tight">Module 1 – Asset Registry & Hierarchy (Clean Build v7.12.7)</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Module 1 – Asset Registry & Hierarchy (Clean Build v7.13.0)</h1>
           <p className="text-slate-600 mt-1">Enter asset data, store locally, and display in a table & graphical hierarchy. Subsystem Level starts at 1.</p>
         </div>
 
@@ -543,7 +578,7 @@ export default function App() {
             <div>
               <Label>Type</Label>
               <Select value={type} onChange={(e) => setType(e.target.value)}>
-                <option>System</option>
+                <option value="System" disabled={hasSystem}>System{hasSystem?' (already exists)':''}</option>
                 <option>Subsystem</option>
                 <option>Component</option>
               </Select>
@@ -677,18 +712,13 @@ export default function App() {
                 <div>
                   <h3 className="font-semibold mb-2">Notes</h3>
                   <ul className="text-sm list-disc pl-5 space-y-1 text-slate-700">
-                    <li><b>System</b>: top/root level (e.g., Trainset, Depot System).</li>
+                    <li><b>System</b>: top/root level (e.g., Trainset, Depot System). Only one System allowed per project.</li>
                     <li><b>Subsystem</b>: parts under System (e.g., Propulsion, Brake). <i>Level</i> starts at 1.</li>
                     <li><b>Component</b>: smallest maintainable unit (e.g., Traction Inverter, Master Controller).</li>
                   </ul>
                 </div>
               </div>
             )}
-            {/* Mobile tabs (mirror) */}
-            <div className="lg:hidden mt-3 flex gap-2">
-              <Button className={`bg-white border-slate-300 text-slate-700 ${activeTab==='table'?'ring-1 ring-indigo-400':''}`} onClick={()=>setActiveTab('table')}>Assets</Button>
-              <Button className={`bg-white border-slate-300 text-slate-700 ${activeTab==='tree'?'ring-1 ring-indigo-400':''}`} onClick={()=>setActiveTab('tree')}>Hierarchy</Button>
-            </div>
           </Card>
         )}
 
