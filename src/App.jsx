@@ -1,7 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-// ===== Module 1 – Asset Registry & Hierarchy (Clean Build v7.13.0) =====
-// v7.13.0 – Enforce single System; duplicate policy (overwrite or index name like Router(1)); UI guards; extra tests.
+// ===== Module 1 – Asset Registry & Hierarchy (Clean Build v7.13.6) =====
+// v7.13.6 – Fix: incomplete <tbody>{filtered.map…} block causing syntax error; hardened table rendering and closed all JSX tags.
+// v7.13.5 – Delete warning when node has children (cascade confirmation). Fixed truncated table action JSX.
+// v7.13.4 – Fix unterminated JSX </Button> for Edit action in table; no logic changes.
+// v7.13.3 – Fix unterminated JSX </Button> in table actions; keep all features stable.
+// v7.13.2 – Fix unterminated JSX comment; auto-select Parent when exactly one candidate exists; add tests for name indexing.
+// v7.13.1 – Auto-select Parent when exactly one valid candidate exists (L1→System, Ln→L(n-1)); clearer messages when no parent exists; minor UX polish.
+// v7.13.0 – Enforce single System; duplicate policy (overwrite or index like Router(1)); UI guards; extra tests.
 // Baseline for rollback remains: v7.11.3
 
 // Storage keys
@@ -26,7 +32,8 @@ function readKey(key) {
   try { const raw = localStorage.getItem(key); if (!raw) return null; const v = JSON.parse(raw); return v; } catch { return null; }
 }
 function readArray(key) { try { const raw = localStorage.getItem(key); if (!raw) return null; const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : null; } catch { return null; } }
-function save(nodes) { try { localStorage.setItem(LS_KEY, JSON.stringify(nodes)); } catch {} }
+function save(nodes) { try { localStorage.setItem(LS_KEY, JSON.stringify(nodes)); } catch {}
+}
 function migrateArray(arr, srcKey) {
   return arr.map((x) => {
     const type = x && typeof x.type === "string" ? x.type : "Component";
@@ -146,6 +153,14 @@ function __buildTests() {
   const t2 = toTree(list);
   results.push(['Root order System first', t2.length>=1 && t2[0].id==='S']);
 
+  // New tests (name indexing)
+  const sibs = ['Router', 'Router(1)', 'Router(3)'];
+  const next1 = nextIndexedName('Router', sibs);
+  results.push(['nextIndexedName gaps -> Router(2)', next1 === 'Router(2)']);
+  const next2 = nextIndexedName('Pump', []);
+  results.push(['nextIndexedName empty -> Pump(1)', next2 === 'Pump(1)']);
+
+  results.push(['Delete cascade count from A is 3', (new Set(getDescendantIds('A', list))).size === 3]);
   const pass = results.filter(r=>r[1]).length;
   return { pass, total: results.length, results };
 }
@@ -255,15 +270,17 @@ export default function App() {
         ? nodes.filter((n) => n.type === "System")
         : nodes.filter((n) => n.type === "Subsystem" && Number(n.level) === lv - 1);
       if (parentId && !candidates.some((c) => c.id === parentId)) { setParentId(""); }
+      if (!parentId && candidates.length === 1) { setParentId(candidates[0].id); }
       return;
     }
     if (type === "Component") {
       const candidates = nodes.filter((n) => n.type === "Subsystem");
       if (parentId && !candidates.some((c) => c.id === parentId)) { setParentId(""); }
+      if (!parentId && candidates.length === 1) { setParentId(candidates[0].id); }
       return;
     }
     if (type === "System") setParentId("");
-  }, [type, subsystemLevel, nodes]);
+  }, [type, subsystemLevel, nodes, parentId]);
 
   // Parent options (add form)
   const addParentOptions = useMemo(() => {
@@ -334,8 +351,17 @@ export default function App() {
           const candidates = v === 1
             ? nodes.filter((n) => n.type === "System")
             : nodes.filter((n) => n.type === "Subsystem" && Number(n.level) === v - 1);
-          if (candidates.length === 1) { parent = candidates[0]; try { setParentId(parent.id); } catch {} }
-          else { const needed = v === 1 ? "System" : `Subsystem L${v-1}`; alert(`Choose Parent: ${needed}`); return; }
+          if (candidates.length === 1) {
+            parent = candidates[0]; try { setParentId(parent.id); } catch {}
+          } else if (candidates.length === 0) {
+            const needed = v === 1 ? "System" : `Subsystem L${v-1}`;
+            alert(v === 1 ? "Please add a System first." : `Please create ${needed} first.`);
+            return;
+          } else {
+            const needed = v === 1 ? "System" : `Subsystem L${v-1}`;
+            alert(`Multiple parents found. Please choose a Parent (${needed}).`);
+            return;
+          }
         }
       }
 
@@ -419,7 +445,22 @@ export default function App() {
   // ---- Delete with inline confirm ----
   function askDelete(node) { setEditingId(""); setPendingDeleteId(node.id); }
   function cancelDelete() { setPendingDeleteId(""); }
-  function confirmDelete() { if (!pendingDeleteId) return; const delIds = new Set(getDescendantIds(pendingDeleteId, nodes)); pushHistory(); setNodes((prev) => prev.filter((a) => !delIds.has(a.id))); setPendingDeleteId(""); }
+  function confirmDelete() {
+    if (!pendingDeleteId) return;
+    const delIds = new Set(getDescendantIds(pendingDeleteId, nodes));
+    const target = nodes.find(n => n.id === pendingDeleteId) || null;
+    const hasChildren = delIds.size > 1;
+    if (hasChildren) {
+      const ok = window.confirm(
+        `Warning: "${target ? target.name : 'This node'}" has ${delIds.size - 1} descendant node(s).` +
+        `\nDeleting will remove them all.\n\nAre you sure?`
+      );
+      if (!ok) { setPendingDeleteId(""); return; }
+    }
+    pushHistory();
+    setNodes((prev) => prev.filter((a) => !delIds.has(a.id)));
+    setPendingDeleteId("");
+  }
 
   // ---- Utilities ----
   function clearAll() {
@@ -563,7 +604,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900 p-6">
       <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-3">
-          <h1 className="text-2xl font-bold tracking-tight">Module 1 – Asset Registry & Hierarchy (Clean Build v7.13.0)</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Module 1 – Asset Registry & Hierarchy (Clean Build v7.13.6)</h1>
           <p className="text-slate-600 mt-1">Enter asset data, store locally, and display in a table & graphical hierarchy. Subsystem Level starts at 1.</p>
         </div>
 
@@ -674,10 +715,26 @@ export default function App() {
                     <td className="p-2">{(byId.get(n.parentId || '') || {}).name || "—"}</td>
                     <td className="p-2 font-mono text-xs">{n.id}</td>
                     <td className="p-2">{new Date(n.createdAt).toLocaleString()}</td>
-                    <td className="p-2"><div className="flex gap-2"><Button className="bg-white text-slate-700 border-slate-300" onClick={() => beginEdit(n)}>Edit</Button>{pendingDeleteId === n.id ? (<><Button className="bg-white text-rose-700 border-rose-300" onClick={confirmDelete}>Confirm Delete?</Button><Button className="bg-white text-slate-700 border-slate-300" onClick={cancelDelete}>Cancel</Button></>) : (<Button className="bg-white text-rose-700 border-rose-300" onClick={() => askDelete(n)}>Delete</Button>)}</div></td>
+                    <td className="p-2">
+                      <div className="flex gap-2">
+                        <Button className="bg-white text-slate-700 border-slate-300" onClick={() => beginEdit(n)}>Edit</Button>
+                        {pendingDeleteId === n.id ? (
+                          <>
+                            <Button className="bg-white text-rose-700 border-rose-300" onClick={confirmDelete}>Confirm Delete?</Button>
+                            <Button className="bg-white text-slate-700 border-slate-300" onClick={cancelDelete}>Cancel</Button>
+                          </>
+                        ) : (
+                          <Button className="bg-white text-rose-700 border-rose-300" onClick={() => askDelete(n)}>Delete</Button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
-                {filtered.length === 0 ? (<tr><td className="p-4 text-center text-slate-500" colSpan={7}>No data yet</td></tr>) : null}
+                {filtered.length === 0 ? (
+                  <tr>
+                    <td className="p-4 text-center text-slate-500" colSpan={7}>No data yet</td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
